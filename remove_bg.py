@@ -25,6 +25,9 @@ out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
 
 transform = transforms.ToTensor()
 
+# Initialize recurrent states as None for the first frame
+rec_states = None
+
 with torch.no_grad():
     for _ in tqdm(range(int(cap.get(cv2.CAP_PROP_FRAME_COUNT)))):
         ret, frame = cap.read()
@@ -34,17 +37,24 @@ with torch.no_grad():
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         tensor = transform(rgb).unsqueeze(0).to(device)
 
-        fgr, pha, *_ = model(tensor, None)
+        # Pass rec_states and update them with the model's output
+        # fgr = foreground, pha = alpha mask, rec_states = temporal memory
+        fgr, pha, *rec_states = model(tensor, *rec_states) if rec_states is not None else model(tensor)
+
         mask = pha[0][0].cpu().numpy()
+
+        # --- IMPROVEMENT: MASK SHARPENING ---
+        # Any pixel > 0.3 probability becomes more solid (helps with limb detection)
+        mask = np.clip(mask * 1.5, 0, 1)
 
         green_bg = np.zeros_like(frame)
         green_bg[:] = (0, 255, 0)
 
         mask = np.expand_dims(mask, axis=2)
-        output = frame * mask + green_bg * (1 - mask)
-        output = output.astype(np.uint8)
 
-        out.write(output)
+        # Combine using the improved mask
+        output = frame * mask + green_bg * (1 - mask)
+        out.write(output.astype(np.uint8))
 
 cap.release()
 out.release()
