@@ -3,30 +3,38 @@ import cv2
 import numpy as np
 from torchvision import transforms
 from tqdm import tqdm
+import subprocess
+import os
 
-# Load model
+# 1. Setup Model
 model = torch.jit.load("rvm_mobilenetv3_fp32.torchscript")
 model.eval()
 
+# Optimized for your MacBook Pro M1
 device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
 model.to(device)
 
-# Video input/output
 input_path = "input.mp4"
-output_path = "output_green.mp4"
+temp_output = "temp_no_audio.mp4"
+final_output = "output_with_audio.mp4"
 
 cap = cv2.VideoCapture(input_path)
 fps = cap.get(cv2.CAP_PROP_FPS)
 width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
 height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
+# Downsample ratio: 0.5 is usually the sweet spot for 1080p
+downsample_ratio = torch.tensor([0.5], dtype=torch.float32).to(device)
+
 fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+out = cv2.VideoWriter(temp_output, fourcc, fps, (width, height))
 
 transform = transforms.ToTensor()
 
-# Initialize recurrent states as None for the first frame
-rec_states = None
+# 1. Initialize states as four separate None objects
+r1, r2, r3, r4 = None, None, None, None
+
+print(f"Processing on {device}...")
 
 with torch.no_grad():
     for _ in tqdm(range(int(cap.get(cv2.CAP_PROP_FRAME_COUNT)))):
@@ -35,28 +43,46 @@ with torch.no_grad():
             break
 
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        tensor = transform(rgb).unsqueeze(0).to(device)
+        tensor = transform(rgb).unsqueeze(0).to(device).to(torch.float32)
 
-        # Pass rec_states and update them with the model's output
-        # fgr = foreground, pha = alpha mask, rec_states = temporal memory
-        fgr, pha, *rec_states = model(tensor, *rec_states) if rec_states is not None else model(tensor)
+        # 2. Pass them explicitly according to the model's 'Declaration'
+        # forward(src, r1, r2, r3, r4, downsample_ratio)
+        # Note: we convert downsample_ratio to a float because your model asks for 'float'
+        fgr, pha, r1, r2, r3, r4 = model(tensor, r1, r2, r3, r4, float(downsample_ratio))
 
+        # Process the mask
         mask = pha[0][0].cpu().numpy()
 
-        # --- IMPROVEMENT: MASK SHARPENING ---
-        # Any pixel > 0.3 probability becomes more solid (helps with limb detection)
-        mask = np.clip(mask * 1.5, 0, 1)
+        # IMPROVED MASK LOGIC for your white robot:
+        # We increase the contrast of the mask to keep the limbs
+        mask = np.where(mask > 0.1, mask * 1.2, mask * 0.5)
+        mask = np.clip(mask, 0, 1)
+
+        mask = np.expand_dims(mask, axis=2)
 
         green_bg = np.zeros_like(frame)
         green_bg[:] = (0, 255, 0)
 
-        mask = np.expand_dims(mask, axis=2)
-
-        # Combine using the improved mask
-        output = frame * mask + green_bg * (1 - mask)
-        out.write(output.astype(np.uint8))
+        output = (frame * mask + green_bg * (1 - mask)).astype(np.uint8)
+        out.write(output)
 
 cap.release()
 out.release()
-print("Finished.")
 
+# --- AUDIO MERGE (Requires brew install ffmpeg) ---
+if os.path.exists(temp_output):
+    print("Merging audio...")
+    cmd = [
+        'ffmpeg', '-y',
+        '-i', temp_output,
+        '-i', input_path,
+        '-map', '0:v:0',
+        '-map', '1:a:0?',
+        '-c:v', 'copy',
+        '-c:a', 'aac',
+        final_output
+    ]
+    subprocess.run(cmd)
+    if os.path.exists(final_output):
+        os.remove(temp_output)
+        print(f"Finished! Final video: {final_output}")
