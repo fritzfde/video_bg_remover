@@ -1,0 +1,40 @@
+# -------------------------
+# Python
+# -------------------------
+# Virtual environments
+myenv/
+env/
+venv/
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# -------------------------
+# JetBrains IDE
+# -------------------------
+.idea/
+*.iml
+*.iws
+
+# -------------------------
+# macOS
+# -------------------------
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# -------------------------
+# Logs / temp files
+# -------------------------
+logs/
+*.log
+*.tmp
+
+# -------------------------
+# Large or local MP4, MOV files (optional)
+# -------------------------
+*.mp4
+*.mov
+intro.mp4
+outro.mp4
